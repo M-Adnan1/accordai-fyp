@@ -1,0 +1,25 @@
+# Frontend
+accordai-frontend/node_modules/
+accordai-frontend/dist/
+accordai-frontend/.env
+
+# Backend
+accordai-backend/.venv/
+accordai-backend/venv/
+accordai-backend/__pycache__/
+accordai-backend/.env
+accordai-backend/*.db
+
+# Optional - if Chroma DB can be regenerated
+accordai-backend/chroma_db/
+
+# IDE
+.vscode/
+.idea/
+
+# Python
+*.pyc
+
+# OS
+Thumbs.db
+.DS_Store

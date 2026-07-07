@@ -1,0 +1,54 @@
+.table-empty {
+  text-align: center;
+  padding: 48px;
+  color: var(--text-muted);
+}
+
+.caller-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.caller-avatar {
+  width: 30px; height: 30px;
+  background: rgba(59,130,246,0.12);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--blue-300);
+  flex-shrink: 0;
+}
+
+.caller-number {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.caller-name {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.pagination-info {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.pagination-btns {
+  display: flex;
+  gap: 8px;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

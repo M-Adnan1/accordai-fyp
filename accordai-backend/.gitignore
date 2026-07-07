@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.env
+.vscode/
+.idea/
+*.swp
+*.db
+accordai.db
