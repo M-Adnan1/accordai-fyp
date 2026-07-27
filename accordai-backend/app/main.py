@@ -51,7 +51,7 @@ app.include_router(analytics_router, prefix="/analytics", tags=["Analytics"])
 app.include_router(tools_router, prefix="/tools", tags=["Tools"])
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

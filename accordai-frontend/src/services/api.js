@@ -7,14 +7,23 @@ export const getToken = () => localStorage.getItem(TOKEN_KEY)
 export const setToken = (t) => localStorage.setItem(TOKEN_KEY, t)
 export const clearToken = () => localStorage.removeItem(TOKEN_KEY)
 
+// Backend location. In dev this stays '/api' and the Vite proxy forwards it
+// to localhost:8000. In production (Vercel) there is no proxy — set
+// VITE_API_BASE_URL to the backend's public origin (e.g. the ngrok URL),
+// with no trailing slash and no /api suffix (backend routes are unprefixed).
+const API_BASE = import.meta.env?.VITE_API_BASE_URL || '/api'
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE,
   timeout: 30000,
 })
 
 api.interceptors.request.use((config) => {
   const token = getToken()
   if (token) config.headers.Authorization = `Bearer ${token}`
+  // ngrok's free tier intercepts browser-looking requests with an HTML warning
+  // page unless this header is present. Harmless for non-ngrok backends.
+  config.headers['ngrok-skip-browser-warning'] = 'true'
   return config
 })
 

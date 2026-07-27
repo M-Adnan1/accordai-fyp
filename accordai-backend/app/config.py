@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     # Shown in Settings as the voice webhook base; not used for routing.
     PUBLIC_BASE_URL: str = "http://localhost:8000"
 
+    # Comma-separated browser origins allowed by CORS (add the deployed
+    # frontend's domain here, e.g. "http://localhost:3000,https://app.vercel.app").
+    CORS_ORIGINS: str = "http://localhost:3000"
+
     # Client tool execution
     TOOL_HTTP_TIMEOUT: float = 10.0
     # Dev-only escape hatch so test scripts can point tools at 127.0.0.1.
