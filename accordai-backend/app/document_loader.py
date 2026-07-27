@@ -1,7 +1,6 @@
-import os
 import re
 from pathlib import Path
-from typing import List, Dict
+from typing import List
 from app.config import get_settings
 
 settings = get_settings()
@@ -45,36 +44,3 @@ def chunk_text(
 
     return chunks
 
-def load_documents(documents_dir: str = None) -> List[Dict]:
-    """Load all PDFs and text files from the documents directory."""
-    docs_path = Path(documents_dir or settings.DOCUMENTS_DIR)
-    docs_path.mkdir(parents=True, exist_ok=True)
-
-    documents = []
-    supported = {".txt", ".pdf", ".md"}
-
-    for file_path in docs_path.iterdir():
-        if file_path.suffix.lower() not in supported:
-            continue
-
-        print(f"Loading: {file_path.name}")
-
-        if file_path.suffix.lower() == ".pdf":
-            text = load_pdf_file(file_path)
-        else:
-            text = load_text_file(file_path)
-
-        chunks = chunk_text(text)
-
-        for i, chunk in enumerate(chunks):
-            documents.append({
-                "content": chunk,
-                "metadata": {
-                    "source": file_path.name,
-                    "chunk_index": i,
-                    "file_type": file_path.suffix.lower()
-                }
-            })
-
-    print(f"Loaded {len(documents)} chunks from {docs_path}")
-    return documents

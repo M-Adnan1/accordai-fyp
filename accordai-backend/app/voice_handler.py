@@ -8,7 +8,6 @@ from app.models import CallStatus
 import app.crud as crud
 import logging
 import time
-
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -25,8 +24,6 @@ def is_goodbye(text: str) -> bool:
     """Check if user's message contains a goodbye intent."""
     text_lower = text.lower().strip()
     return any(phrase in text_lower for phrase in GOODBYE_PHRASES)
-
-
 @router.post("/incoming")
 async def handle_incoming_call(
     request: Request,
@@ -37,26 +34,35 @@ async def handle_incoming_call(
     from_number = form.get("From")
     to_number = form.get("To")
 
-    logger.info(f"Incoming call from {from_number} (SID: {call_sid})")
+    logger.info(f"Incoming call from {from_number} to {to_number} (SID: {call_sid})")
 
-    await crud.create_call(db, call_sid, from_number, to_number)
+    tenant = await crud.get_client_by_number(db, to_number)
+    if not tenant:
+        logger.warning(f"No active client found for Twilio number {to_number}. Rejecting call.")
+        response = VoiceResponse()
+        response.say(
+            "We're sorry, this number is not currently in service. Goodbye.",
+            voice="Polly.Joanna"
+        )
+        response.hangup()
+        return Response(content=str(response), media_type="application/xml")
+
+    await crud.create_call(db, call_sid, from_number, to_number, client_id=tenant.id)
 
     response = VoiceResponse()
-    response.say(
-        "Hello! Welcome to Accord AI customer service. How can I help you today?",
-        voice="Polly.Joanna"
-    )
+    response.say(tenant.greeting, voice=tenant.voice)
 
     gather = Gather(
         input="speech",
         action="/voice/process",
         method="POST",
         speech_timeout="auto",
+        speech_model="phone_call",
         language="en-US"
     )
     response.append(gather)
 
-    response.say("I didn't hear anything. Please call back when you're ready.")
+    response.say("I didn't hear anything. Please call back when you're ready.", voice=tenant.voice)
     response.hangup()
 
     return Response(content=str(response), media_type="application/xml")
@@ -73,20 +79,35 @@ async def process_speech(
 
     response = VoiceResponse()
 
+    call = await crud.get_call_by_sid(db, CallSid)
+    voice = call.client.voice if call and call.client else "Polly.Joanna"
+
+    # No call record means we can't resolve the tenant — end gracefully
+    # instead of crashing on call.client_id below.
+    if not call:
+        logger.warning(f"No call record found for SID {CallSid}. Ending call.")
+        response.say("We're sorry, something went wrong. Please call again. Goodbye.", voice=voice)
+        response.hangup()
+        return Response(content=str(response), media_type="application/xml")
+
     if not SpeechResult:
-        response.say("Sorry, I didn't catch that. Could you repeat?")
+        response.say("Sorry, I didn't catch that. Could you repeat?", voice=voice)
         response.redirect("/voice/incoming")
         return Response(content=str(response), media_type="application/xml")
 
     await crud.update_call_status(db, CallSid, CallStatus.IN_PROGRESS)
     await crud.add_message(db, CallSid, "user", SpeechResult)
 
+    # A tool call awaiting confirmation must be resolved by the LLM flow —
+    # phrases like "no thanks" are a decline of the action, not a goodbye.
+    pending_tool = await crud.get_pending_tool_call(db, call.id)
+
     # Check for goodbye intent BEFORE calling the LLM
-    if is_goodbye(SpeechResult):
+    if not pending_tool and is_goodbye(SpeechResult):
         logger.info(f"Goodbye intent detected: '{SpeechResult}'")
         response.say(
             "It was a pleasure helping you today. Before you go, please rate your experience.",
-            voice="Polly.Joanna"
+            voice=voice
         )
         # Redirect to rating flow
         response.redirect("/voice/rate")
@@ -96,7 +117,10 @@ async def process_speech(
     history = await crud.get_conversation_history(db, CallSid)
 
     start = time.time()
-    ai_response = await get_ai_response(SpeechResult, history)
+    ai_response = await get_ai_response(
+        SpeechResult, client_id=call.client_id, db=db,
+        conversation_history=history, call_id=call.id
+    )
     response_time_ms = int((time.time() - start) * 1000)
 
     logger.info(f"🤖 AI response: {ai_response}")
@@ -106,24 +130,27 @@ async def process_speech(
 
     # Check if the AI itself is wrapping up the conversation
     if is_goodbye(ai_response):
-        response.say(ai_response, voice="Polly.Joanna")
+        response.say(ai_response, voice=voice)
         response.redirect("/voice/rate")
         return Response(content=str(response), media_type="application/xml")
 
     # Continue conversation
-    response.say(ai_response, voice="Polly.Joanna")
+    response.say(ai_response, voice=voice)
 
     gather = Gather(
         input="speech",
         action="/voice/process",
         method="POST",
-        speech_timeout="auto",
+        # Numeric timeout (not "auto"): callers pause between digit groups when
+        # speaking phone numbers; auto endpointing truncated at the first pause.
+        # Costs up to 3s of silence at the end of each in-conversation turn.
+        speech_timeout="2",
+        speech_model="googlev2_telephony",
         language="en-US"
     )
-    gather.say("Is there anything else I can help you with?", voice="Polly.Joanna")
+    # gather.say("Is there anything else I can help you with?", voice=voice)
     response.append(gather)
-
-    response.say("Thank you for calling. Goodbye!")
+    response.say("Thank you for calling. Goodbye!", voice=voice)
     response.redirect("/voice/rate")
 
     return Response(content=str(response), media_type="application/xml")
@@ -138,6 +165,9 @@ async def rate_call(
     """Ask the user to rate their experience before hanging up."""
     response = VoiceResponse()
 
+    call = await crud.get_call_by_sid(db, CallSid)
+    voice = call.client.voice if call and call.client else "Polly.Joanna"
+
     gather = Gather(
         input="dtmf",           # keypad input, not speech
         action="/voice/save-rating",
@@ -147,12 +177,12 @@ async def rate_call(
     )
     gather.say(
         "Please press 1 if you were satisfied with our service, or press 0 if you were not.",
-        voice="Polly.Joanna"
+        voice=voice
     )
     response.append(gather)
 
     # If no input, skip rating and hang up
-    response.say("We didn't receive your rating. Thank you for calling. Goodbye!", voice="Polly.Joanna")
+    response.say("We didn't receive your rating. Thank you for calling. Goodbye!", voice=voice)
     response.hangup()
 
     return Response(content=str(response), media_type="application/xml")
@@ -170,6 +200,9 @@ async def save_rating(
 
     response = VoiceResponse()
 
+    call = await crud.get_call_by_sid(db, CallSid)
+    voice = call.client.voice if call and call.client else "Polly.Joanna"
+
     if Digits in ("0", "1"):
         rating = int(Digits)
         await crud.update_call_rating(db, CallSid, rating)
@@ -177,18 +210,18 @@ async def save_rating(
         if rating == 1:
             response.say(
                 "Thank you for your positive feedback! Have a great day. Goodbye!",
-                voice="Polly.Joanna"
+                voice=voice
             )
         else:
             response.say(
                 "We're sorry to hear that. We'll work on improving. Thank you for calling. Goodbye!",
-                voice="Polly.Joanna"
+                voice=voice
             )
     else:
         # Invalid key pressed
         response.say(
             "Invalid input. Thank you for calling. Goodbye!",
-            voice="Polly.Joanna"
+            voice=voice
         )
 
     response.hangup()

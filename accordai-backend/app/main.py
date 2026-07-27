@@ -4,9 +4,12 @@ from app.voice_handler import router as voice_router
 from app.database import engine, Base
 from app.config import get_settings
 import logging
-from app.rag_service import get_chroma_collection
+from app.rag_service import get_chroma_collection, get_embedding_model
 from app.documents_router import router as documents_router
 from app.analytics_router import router as analytics_router
+from app.tools_router import router as tools_router
+from app.auth_router import router as auth_router
+from app.account_router import router as account_router
 from fastapi.middleware.cors import CORSMiddleware
 
 
@@ -26,6 +29,9 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing ChromaDB...")
     get_chroma_collection()
     logger.info("ChromaDB ready.")
+    logger.info("Preloading embedding model...")
+    get_embedding_model()
+    logger.info("Embedding model ready.")
     yield
     logger.info("Shutting down...")
     await engine.dispose()
@@ -37,9 +43,12 @@ app = FastAPI(
 )
 
 
+app.include_router(auth_router, prefix="/auth", tags=["Auth"])
+app.include_router(account_router, prefix="/account", tags=["Account"])
 app.include_router(voice_router, prefix="/voice", tags=["Voice"])
 app.include_router(documents_router, prefix="/documents", tags=["Documents"])
 app.include_router(analytics_router, prefix="/analytics", tags=["Analytics"])
+app.include_router(tools_router, prefix="/tools", tags=["Tools"])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],

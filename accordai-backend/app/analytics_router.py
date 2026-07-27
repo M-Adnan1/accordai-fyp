@@ -2,27 +2,35 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.crud import get_dashboard_analytics
-from app.models import Call, Customer
+from app.deps import get_current_user
+from app.models import Call, User
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
 router = APIRouter()
 
+# Tenant context comes from the authenticated user's client_id on every route.
 @router.get("/dashboard")
-async def dashboard_analytics(db: AsyncSession = Depends(get_db)):
-    """Main analytics endpoint for the dashboard."""
-    return await get_dashboard_analytics(db)
+async def dashboard_analytics(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Main analytics endpoint for the authenticated tenant's dashboard."""
+    return await get_dashboard_analytics(db, user.client_id)
 
 @router.get("/calls")
 async def list_calls(
     skip: int = 0,
     limit: int = 20,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Paginated call history for the dashboard table."""
+    client_id = user.client_id
+    """Paginated call history for one client's dashboard table."""
     result = await db.execute(
         select(Call)
         .options(selectinload(Call.customer))
+        .where(Call.client_id == client_id)
         .order_by(Call.created_at.desc())
         .offset(skip)
         .limit(limit)
@@ -47,13 +55,15 @@ async def list_calls(
 @router.get("/calls/{call_sid}/transcript")
 async def get_transcript(
     call_sid: str,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Full conversation transcript for a specific call."""
+    client_id = user.client_id
+    """Full conversation transcript for a specific call, scoped to one client."""
     result = await db.execute(
         select(Call)
         .options(selectinload(Call.messages), selectinload(Call.customer))
-        .where(Call.call_sid == call_sid)
+        .where(Call.call_sid == call_sid, Call.client_id == client_id)
     )
     call = result.scalar_one_or_none()
     if not call:

@@ -1,0 +1,469 @@
+[1mdiff --git a/accordai-backend/.gitignore b/accordai-backend/.gitignore[m
+[1mindex 7fb4300..42743a5 100644[m
+[1m--- a/accordai-backend/.gitignore[m
+[1m+++ b/accordai-backend/.gitignore[m
+[36m@@ -7,6 +7,8 @@[m [mvenv/[m
+ env/[m
+ .env[m
+ .vscode/[m
+[32m+[m[32mdocuments/[m
+[32m+[m[32mchroma_db/[m
+ .idea/[m
+ *.swp[m
+ *.db[m
+[1mdiff --git a/accordai-backend/app/analytics_router.py b/accordai-backend/app/analytics_router.py[m
+[1mindex 9bd2f8a..bde494d 100644[m
+[1m--- a/accordai-backend/app/analytics_router.py[m
+[1m+++ b/accordai-backend/app/analytics_router.py[m
+[36m@@ -2,27 +2,33 @@[m [mfrom fastapi import APIRouter, Depends[m
+ from sqlalchemy.ext.asyncio import AsyncSession[m
+ from app.database import get_db[m
+ from app.crud import get_dashboard_analytics[m
+[31m-from app.models import Call, Customer[m
+[32m+[m[32mfrom app.models import Call[m
+ from sqlalchemy.future import select[m
+ from sqlalchemy.orm import selectinload[m
+ [m
+ router = APIRouter()[m
+ [m
+[32m+[m[32m# TODO: client_id is a placeholder query param until real auth exists.[m
+[32m+[m[32m# Once auth is in place, derive the client from the authenticated identity[m
+[32m+[m[32m# instead of trusting a caller-supplied value.[m
+ @router.get("/dashboard")[m
+[31m-async def dashboard_analytics(db: AsyncSession = Depends(get_db)):[m
+[31m-    """Main analytics endpoint for the dashboard."""[m
+[31m-    return await get_dashboard_analytics(db)[m
+[32m+[m[32masync def dashboard_analytics(client_id: int, db: AsyncSession = Depends(get_db)):[m
+[32m+[m[32m    """Main analytics endpoint for one client's dashboard."""[m
+[32m+[m[32m    return await get_dashboard_analytics(db, client_id)[m
+ [m
+[32m+[m[32m# TODO: client_id is a placeholder query param until real auth exists.[m
+ @router.get("/calls")[m
+ async def list_calls([m
+[32m+[m[32m    client_id: int,[m
+     skip: int = 0,[m
+     limit: int = 20,[m
+     db: AsyncSession = Depends(get_db)[m
+ ):[m
+[31m-    """Paginated call history for the dashboard table."""[m
+[32m+[m[32m    """Paginated call history for one client's dashboard table."""[m
+     result = await db.execute([m
+         select(Call)[m
+         .options(selectinload(Call.customer))[m
+[32m+[m[32m        .where(Call.client_id == client_id)[m
+         .order_by(Call.created_at.desc())[m
+         .offset(skip)[m
+         .limit(limit)[m
+[36m@@ -44,16 +50,18 @@[m [masync def list_calls([m
+         for c in calls[m
+     ][m
+ [m
+[32m+[m[32m# TODO: client_id is a placeholder query param until real auth exists.[m
+ @router.get("/calls/{call_sid}/transcript")[m
+ async def get_transcript([m
+     call_sid: str,[m
+[32m+[m[32m    client_id: int,[m
+     db: AsyncSession = Depends(get_db)[m
+ ):[m
+[31m-    """Full conversation transcript for a specific call."""[m
+[32m+[m[32m    """Full conversation transcript for a specific call, scoped to one client."""[m
+     result = await db.execute([m
+         select(Call)[m
+         .options(selectinload(Call.messages), selectinload(Call.customer))[m
+[31m-        .where(Call.call_sid == call_sid)[m
+[32m+[m[32m        .where(Call.call_sid == call_sid, Call.client_id == client_id)[m
+     )[m
+     call = result.scalar_one_or_none()[m
+     if not call:[m
+[1mdiff --git a/accordai-backend/app/crud.py b/accordai-backend/app/crud.py[m
+[1mindex b50a306..ff32e0d 100644[m
+[1m--- a/accordai-backend/app/crud.py[m
+[1m+++ b/accordai-backend/app/crud.py[m
+[36m@@ -2,10 +2,34 @@[m [mfrom sqlalchemy.ext.asyncio import AsyncSession[m
+ from sqlalchemy.future import select[m
+ from sqlalchemy.orm import selectinload[m
+ from sqlalchemy import func, cast, Date[m
+[31m-from app.models import Call, Message, CallStatus, Customer, Document[m
+[32m+[m[32mfrom app.models import Call, Message, CallStatus, Customer, Document, Client[m
+ from typing import List, Optional[m
+ import time[m
+ [m
+[32m+[m[32m# ── Clients ───────────────────────────────────────────────[m
+[32m+[m
+[32m+[m[32masync def get_client_by_number([m
+[32m+[m[32m    db: AsyncSession,[m
+[32m+[m[32m    twilio_number: str[m
+[32m+[m[32m) -> Optional[Client]:[m
+[32m+[m[32m    """Look up an active client by the Twilio number that was called."""[m
+[32m+[m[32m    result = await db.execute([m
+[32m+[m[32m        select(Client).where([m
+[32m+[m[32m            Client.twilio_number == twilio_number,[m
+[32m+[m[32m            Client.is_active == True[m
+[32m+[m[32m        )[m
+[32m+[m[32m    )[m
+[32m+[m[32m    return result.scalar_one_or_none()[m
+[32m+[m
+[32m+[m[32masync def get_client([m
+[32m+[m[32m    db: AsyncSession,[m
+[32m+[m[32m    client_id: int[m
+[32m+[m[32m) -> Optional[Client]:[m
+[32m+[m[32m    result = await db.execute([m
+[32m+[m[32m        select(Client).where(Client.id == client_id)[m
+[32m+[m[32m    )[m
+[32m+[m[32m    return result.scalar_one_or_none()[m
+[32m+[m
+ # ── Customer ──────────────────────────────────────────────[m
+ [m
+ async def get_or_create_customer([m
+[36m@@ -34,14 +58,16 @@[m [masync def create_call([m
+     db: AsyncSession,[m
+     call_sid: str,[m
+     from_number: str,[m
+[31m-    to_number: str[m
+[32m+[m[32m    to_number: str,[m
+[32m+[m[32m    client_id: int[m
+ ) -> Call:[m
+     customer = await get_or_create_customer(db, from_number)[m
+     call = Call([m
+         call_sid=call_sid,[m
+         from_number=from_number,[m
+         to_number=to_number,[m
+[31m-        customer_id=customer.id[m
+[32m+[m[32m        customer_id=customer.id,[m
+[32m+[m[32m        client_id=client_id[m
+     )[m
+     db.add(call)[m
+     await db.commit()[m
+[36m@@ -54,7 +80,7 @@[m [masync def get_call_by_sid([m
+ ) -> Optional[Call]:[m
+     result = await db.execute([m
+         select(Call)[m
+[31m-        .options(selectinload(Call.messages))[m
+[32m+[m[32m        .options(selectinload(Call.messages), selectinload(Call.client))[m
+         .where(Call.call_sid == call_sid)[m
+     )[m
+     return result.scalar_one_or_none()[m
+[36m@@ -118,32 +144,49 @@[m [masync def get_conversation_history([m
+     ][m
+ [m
+ [m
+[31m-async def get_dashboard_analytics(db: AsyncSession) -> dict:[m
+[32m+[m[32masync def get_dashboard_analytics(db: AsyncSession, client_id: int) -> dict:[m
+     # Total calls[m
+[31m-    total_calls = await db.scalar(select(func.count(Call.id)))[m
+[32m+[m[32m    total_calls = await db.scalar([m
+[32m+[m[32m        select(func.count(Call.id)).where(Call.client_id == client_id)[m
+[32m+[m[32m    )[m
+ [m
+     # Calls by status[m
+     completed = await db.scalar([m
+[31m-        select(func.count(Call.id)).where(Call.status == CallStatus.COMPLETED)[m
+[32m+[m[32m        select(func.count(Call.id)).where([m
+[32m+[m[32m            Call.client_id == client_id,[m
+[32m+[m[32m            Call.status == CallStatus.COMPLETED[m
+[32m+[m[32m        )[m
+     )[m
+     failed = await db.scalar([m
+[31m-        select(func.count(Call.id)).where(Call.status == CallStatus.FAILED)[m
+[32m+[m[32m        select(func.count(Call.id)).where([m
+[32m+[m[32m            Call.client_id == client_id,[m
+[32m+[m[32m            Call.status == CallStatus.FAILED[m
+[32m+[m[32m        )[m
+     )[m
+ [m
+     # Average duration (completed calls only)[m
+     avg_duration = await db.scalar([m
+         select(func.avg(Call.duration)).where([m
+[32m+[m[32m            Call.client_id == client_id,[m
+             Call.status == CallStatus.COMPLETED,[m
+             Call.duration.isnot(None)[m
+         )[m
+     )[m
+ [m
+[31m-    # Total unique customers[m
+[31m-    total_customers = await db.scalar(select(func.count(Customer.id)))[m
+[32m+[m[32m    # Unique customers who have called this client[m
+[32m+[m[32m    total_customers = await db.scalar([m
+[32m+[m[32m        select(func.count(func.distinct(Call.customer_id))).where([m
+[32m+[m[32m            Call.client_id == client_id,[m
+[32m+[m[32m            Call.customer_id.isnot(None)[m
+[32m+[m[32m        )[m
+[32m+[m[32m    )[m
+ [m
+     # Resolved rate[m
+     resolved_count = await db.scalar([m
+[31m-        select(func.count(Call.id)).where(Call.resolved == True)[m
+[32m+[m[32m        select(func.count(Call.id)).where([m
+[32m+[m[32m            Call.client_id == client_id,[m
+[32m+[m[32m            Call.resolved == True[m
+[32m+[m[32m        )[m
+     )[m
+ [m
+     # Calls per day (last 7 days)[m
+[36m@@ -152,6 +195,7 @@[m [masync def get_dashboard_analytics(db: AsyncSession) -> dict:[m
+             cast(Call.created_at, Date).label("date"),[m
+             func.count(Call.id).label("count")[m
+         )[m
+[32m+[m[32m        .where(Call.client_id == client_id)[m
+         .group_by(cast(Call.created_at, Date))[m
+         .order_by(cast(Call.created_at, Date).desc())[m
+         .limit(7)[m
+[36m@@ -162,20 +206,27 @@[m [masync def get_dashboard_analytics(db: AsyncSession) -> dict:[m
+     ][m
+ [m
+     # Avg messages per call[m
+[31m-    avg_messages = await db.scalar(select(func.avg(Call.total_messages)))[m
+[32m+[m[32m    avg_messages = await db.scalar([m
+[32m+[m[32m        select(func.avg(Call.total_messages)).where(Call.client_id == client_id)[m
+[32m+[m[32m    )[m
+ [m
+     # Average satisfaction (only rated calls)[m
+     avg_satisfaction = await db.scalar([m
+         select(func.avg(Call.satisfaction_rating)).where([m
+[31m-        Call.satisfaction_rating.isnot(None)[m
+[32m+[m[32m            Call.client_id == client_id,[m
+[32m+[m[32m            Call.satisfaction_rating.isnot(None)[m
+         )[m
+     )[m
+     satisfied_count = await db.scalar([m
+[31m-    select(func.count(Call.id)).where(Call.satisfaction_rating == 1)[m
+[32m+[m[32m        select(func.count(Call.id)).where([m
+[32m+[m[32m            Call.client_id == client_id,[m
+[32m+[m[32m            Call.satisfaction_rating == 1[m
+[32m+[m[32m        )[m
+     )[m
+     rated_count = await db.scalar([m
+[31m-    select(func.count(Call.id)).where([m
+[31m-        Call.satisfaction_rating.isnot(None)[m
+[32m+[m[32m        select(func.count(Call.id)).where([m
+[32m+[m[32m            Call.client_id == client_id,[m
+[32m+[m[32m            Call.satisfaction_rating.isnot(None)[m
+         )[m
+     )[m
+     return {[m
+[36m@@ -196,11 +247,13 @@[m [masync def get_dashboard_analytics(db: AsyncSession) -> dict:[m
+ [m
+ async def create_document_record([m
+     db: AsyncSession,[m
+[32m+[m[32m    client_id: int,[m
+     filename: str,[m
+     file_type: str,[m
+     chunk_count: int[m
+ ) -> Document:[m
+     doc = Document([m
+[32m+[m[32m        client_id=client_id,[m
+         filename=filename,[m
+         file_type=file_type,[m
+         chunk_count=chunk_count[m
+[36m@@ -210,15 +263,21 @@[m [masync def create_document_record([m
+     await db.refresh(doc)[m
+     return doc[m
+ [m
+[31m-async def get_all_documents(db: AsyncSession) -> List[Document]:[m
+[32m+[m[32masync def get_all_documents(db: AsyncSession, client_id: int) -> List[Document]:[m
+     result = await db.execute([m
+[31m-        select(Document).where(Document.is_active == True)[m
+[32m+[m[32m        select(Document).where([m
+[32m+[m[32m            Document.client_id == client_id,[m
+[32m+[m[32m            Document.is_active == True[m
+[32m+[m[32m        )[m
+     )[m
+     return result.scalars().all()[m
+ [m
+[31m-async def deactivate_document(db: AsyncSession, filename: str) -> bool:[m
+[32m+[m[32masync def deactivate_document(db: AsyncSession, client_id: int, filename: str) -> bool:[m
+     result = await db.execute([m
+[31m-        select(Document).where(Document.filename == filename)[m
+[32m+[m[32m        select(Document).where([m
+[32m+[m[32m            Document.client_id == client_id,[m
+[32m+[m[32m            Document.filename == filename[m
+[32m+[m[32m        )[m
+     )[m
+     doc = result.scalar_one_or_none()[m
+     if doc:[m
+[1mdiff --git a/accordai-backend/app/document_loader.py b/accordai-backend/app/document_loader.py[m
+[1mindex 10b1b40..331c3df 100644[m
+[1m--- a/accordai-backend/app/document_loader.py[m
+[1m+++ b/accordai-backend/app/document_loader.py[m
+[36m@@ -1,7 +1,6 @@[m
+[31m-import os[m
+ import re[m
+ from pathlib import Path[m
+[31m-from typing import List, Dict[m
+[32m+[m[32mfrom typing import List[m
+ from app.config import get_settings[m
+ [m
+ settings = get_settings()[m
+[36m@@ -45,36 +44,3 @@[m [mdef chunk_text([m
+ [m
+     return chunks[m
+ [m
+[31m-def load_documents(documents_dir: str = None) -> List[Dict]:[m
+[31m-    """Load all PDFs and text files from the documents directory."""[m
+[31m-    docs_path = Path(documents_dir or settings.DOCUMENTS_DIR)[m
+[31m-    docs_path.mkdir(parents=True, exist_ok=True)[m
+[31m-[m
+[31m-    documents = [][m
+[31m-    supported = {".txt", ".pdf", ".md"}[m
+[31m-[m
+[31m-    for file_path in docs_path.iterdir():[m
+[31m-        if file_path.suffix.lower() not in supported:[m
+[31m-            continue[m
+[31m-[m
+[31m-        print(f"Loading: {file_path.name}")[m
+[31m-[m
+[31m-        if file_path.suffix.lower() == ".pdf":[m
+[31m-            text = load_pdf_file(file_path)[m
+[31m-        else:[m
+[31m-            text = load_text_file(file_path)[m
+[31m-[m
+[31m-        chunks = chunk_text(text)[m
+[31m-[m
+[31m-        for i, chunk in enumerate(chunks):[m
+[31m-            documents.append({[m
+[31m-                "content": chunk,[m
+[31m-                "metadata": {[m
+[31m-                    "source": file_path.name,[m
+[31m-                    "chunk_index": i,[m
+[31m-                    "file_type": file_path.suffix.lower()[m
+[31m-                }[m
+[31m-            })[m
+[31m-[m
+[31m-    print(f"Loaded {len(documents)} chunks from {docs_path}")[m
+[31m-    return documents[m
+\ No newline at end of file[m
+[1mdiff --git a/accordai-backend/app/documents_router.py b/accordai-backend/app/documents_router.py[m
+[1mindex dec71e6..28c21a9 100644[m
+[1m--- a/accordai-backend/app/documents_router.py[m
+[1m+++ b/accordai-backend/app/documents_router.py[m
+[36m@@ -14,9 +14,17 @@[m [mrouter = APIRouter()[m
+ [m
+ ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md"}[m
+ [m
+[32m+[m
+[32m+[m[32mdef _client_docs_path(client_id: int) -> Path:[m
+[32m+[m[32m    return Path(settings.DOCUMENTS_DIR) / str(client_id)[m
+[32m+[m
+[32m+[m
+[32m+[m[32m# TODO: client_id is a placeholder query param until real auth exists.[m
+[32m+[m[32m# Once auth is in place, derive the client from the authenticated identity[m
+[32m+[m[32m# instead of trusting a caller-supplied value.[m
+ @router.post("/upload")[m
+[31m-async def upload_document(file: UploadFile = File(...)):[m
+[31m-    """Upload and ingest a document into the knowledge base."""[m
+[32m+[m[32masync def upload_document(client_id: int, file: UploadFile = File(...)):[m
+[32m+[m[32m    """Upload and ingest a document into a client's knowledge base."""[m
+     file_ext = Path(file.filename).suffix.lower()[m
+ [m
+     if file_ext not in ALLOWED_EXTENSIONS:[m
+[36m@@ -25,15 +33,16 @@[m [masync def upload_document(file: UploadFile = File(...)):[m
+             detail=f"Unsupported file type '{file_ext}'. Allowed: {ALLOWED_EXTENSIONS}"[m
+         )[m
+ [m
+[31m-    # Save file to documents dir[m
+[31m-    docs_path = Path(settings.DOCUMENTS_DIR)[m
+[32m+[m[32m    # Save file under a per-client subfolder so two clients uploading a[m
+[32m+[m[32m    # same-named file don't overwrite each other's file on disk.[m
+[32m+[m[32m    docs_path = _client_docs_path(client_id)[m
+     docs_path.mkdir(parents=True, exist_ok=True)[m
+     file_path = docs_path / file.filename[m
+ [m
+     with open(file_path, "wb") as f:[m
+         shutil.copyfileobj(file.file, f)[m
+ [m
+[31m-    logger.info(f"Saved uploaded file: {file.filename}")[m
+[32m+[m[32m    logger.info(f"Saved uploaded file: {file.filename} (client_id={client_id})")[m
+ [m
+     # Load & chunk[m
+     try:[m
+[36m@@ -51,7 +60,8 @@[m [masync def upload_document(file: UploadFile = File(...)):[m
+             "metadata": {[m
+                 "source": file.filename,[m
+                 "chunk_index": i,[m
+[31m-                "file_type": file_ext[m
+[32m+[m[32m                "file_type": file_ext,[m
+[32m+[m[32m                "client_id": client_id[m
+             }[m
+         }[m
+         for i, chunk in enumerate(chunks)[m
+[36m@@ -66,10 +76,11 @@[m [masync def upload_document(file: UploadFile = File(...)):[m
+     })[m
+ [m
+ [m
+[32m+[m[32m# TODO: client_id is a placeholder query param until real auth exists.[m
+ @router.get("/list")[m
+[31m-async def list_documents():[m
+[31m-    """List all documents currently in the knowledge base."""[m
+[31m-    docs_path = Path(settings.DOCUMENTS_DIR)[m
+[32m+[m[32masync def list_documents(client_id: int):[m
+[32m+[m[32m    """List all documents currently in a client's knowledge base."""[m
+[32m+[m[32m    docs_path = _client_docs_path(client_id)[m
+     docs_path.mkdir(parents=True, exist_ok=True)[m
+ [m
+     files = [[m
+[36m@@ -77,26 +88,33 @@[m [masync def list_documents():[m
+         if f.suffix.lower() in ALLOWED_EXTENSIONS[m
+     ][m
+     collection = get_chroma_collection()[m
+[32m+[m[32m    client_chunks = collection.get(where={"client_id": {"$eq": client_id}}, include=[])[m
+ [m
+     return {[m
+         "files": files,[m
+[31m-        "total_chunks": collection.count()[m
+[32m+[m[32m        "total_chunks": len(client_chunks["ids"])[m
+     }[m
+ [m
+ [m
+[32m+[m[32m# TODO: client_id is a placeholder query param until real auth exists.[m
+ @router.delete("/delete/{filename}")[m
+[31m-async def delete_document(filename: str):[m
+[31m-    """Delete a document and remove its chunks from ChromaDB."""[m
+[31m-    file_path = Path(settings.DOCUMENTS_DIR) / filename[m
+[32m+[m[32masync def delete_document(filename: str, client_id: int):[m
+[32m+[m[32m    """Delete a document and remove its chunks from ChromaDB, scoped to one client."""[m
+[32m+[m[32m    file_path = _client_docs_path(client_id) / filename[m
+ [m
+     # Remove from disk[m
+     if file_path.exists():[m
+         os.remove(file_path)[m
+[31m-        logger.info(f"Deleted file: {filename}")[m
+[32m+[m[32m        logger.info(f"Deleted file: {filename} (client_id={client_id})")[m
+ [m
+     # Remove its chunks from ChromaDB[m
+     collection = get_chroma_collection()[m
+[31m-    collection.delete(where={"source": {"$eq": filename}})[m
+[31m-    logger.info(f"Removed chunks for: {filename}")[m
+[32m+[m[32m    collection.delete(where={[m
+[32m+[m[32m        "$and": [[m
+[32m+[m[32m            {"source": {"$eq": filename}},[m
+[32m+[m[32m            {"client_id": {"$eq": client_id}}[m
+[32m+[m[32m        ][m
+[32m+[m[32m    })[m
+[32m+[m[32m    logger.info(f"Removed chunks for: {filename} (client_id={client_id})")[m
+ [m
+     return {"message": f"'{filename}' deleted from knowledge base."}[m
+\ No newline at end of file[m
+[1mdiff --git a/accordai-backend/app/ingest.py b/accordai-backend/app/ingest.py[m
+[1mdeleted file mode 100644[m
+[1mindex db99097..0000000[m
+[1m--- a/accordai-backend/app/ingest.py[m
+[1m+++ /dev/null[m
+[36m@@ -1,33 +0,0 @@[m
+[31m-# """[m
+[31m-# Run this script to ingest documents into the knowledge base:[m
+[31m-#     python -m app.ingest[m
+[31m-#     python -m app.ingest --dir ./my_docs[m
+[31m-# """[m
+[31m-# import asyncio[m
+[31m-# import argparse[m
+[31m-# import logging[m
+[31m-# from app.document_loader import load_documents[m
+[31m-# from app.rag_service import ingest_documents, get_chroma_collection[m
+[31m-[m
+[31m-# logging.basicConfig(level=logging.INFO)[m
+[31m-# logger = logging.getLogger(__name__)[m
+[31m-[m
+[31m-# def main():[m
+[31m-#     parser = argparse.ArgumentParser(description="Ingest documents into ChromaDB")[m
+[31m-#     parser.add_argument("--dir", type=str, default=None, help="Path to documents directory")[m
+[31m-#     args = pa

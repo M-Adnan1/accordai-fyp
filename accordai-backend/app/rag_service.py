@@ -4,7 +4,7 @@ from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Optional
 from app.config import get_settings
 import logging
-
+ 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
@@ -46,24 +46,25 @@ def ingest_documents(documents: List[Dict]) -> int:
         return 0
 
     collection = get_chroma_collection()
-    existing = collection.count()
-    
-    sources = list({doc["metadata"]["source"] for doc in documents})
-    for source in sources:
+    # Scope delete-before-reingest to (source AND client_id) — matching on source
+    # alone would delete/overwrite another client's chunks for a same-named file.
+    source_client_pairs = list({
+        (doc["metadata"]["source"], doc["metadata"]["client_id"]) for doc in documents
+    })
+    for source, client_id in source_client_pairs:
         try:
-            collection.delete(where={"source": {"$eq": source}})
-            logger.info(f"Cleared existing chunks for: {source}")
+            collection.delete(where={
+                "$and": [
+                    {"source": {"$eq": source}},
+                    {"client_id": {"$eq": client_id}}
+                ]
+            })
+            logger.info(f"Cleared existing chunks for: {source} (client_id={client_id})")
         except Exception:
-            pass 
-
-
-    # if existing > 0:
-    #     logger.info(f"Clearing {existing} existing chunks before re-ingestion.")
-    #     collection.delete(where={"source": {"$ne": ""}})
-
+            pass
     contents = [doc["content"] for doc in documents]
     metadatas = [doc["metadata"] for doc in documents]
-    ids = [f"chunk_{i}" for i in range(len(documents))]
+    ids = [f"chunk_{doc['metadata']['client_id']}_{doc['metadata']['source']}_{i}" for i, doc in enumerate(documents)]
 
     logger.info(f"Embedding {len(contents)} chunks...")
     embeddings = embed_texts(contents)
@@ -83,10 +84,11 @@ def ingest_documents(documents: List[Dict]) -> int:
 
 def retrieve_context(
     query: str,
+    client_id: int,
     top_k: int = None,
     threshold: float = None
 ) -> List[Dict]:
-    """Retrieve the most relevant chunks for a query."""
+    """Retrieve the most relevant chunks for a query, scoped to a single client."""
     collection = get_chroma_collection()
 
     if collection.count() == 0:
@@ -101,6 +103,7 @@ def retrieve_context(
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=min(top_k, collection.count()),
+        where={"client_id": {"$eq": client_id}},
         include=["documents", "metadatas", "distances"]
     )
 

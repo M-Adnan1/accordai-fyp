@@ -7,6 +7,8 @@ venv/
 env/
 .env
 .vscode/
+documents/
+chroma_db/
 .idea/
 *.swp
 *.db

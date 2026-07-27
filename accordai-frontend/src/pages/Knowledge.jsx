@@ -5,6 +5,7 @@ import {
   AlertCircle, BookOpen, Layers, RefreshCw
 } from 'lucide-react'
 import { fetchDocuments, uploadDocument, deleteDocument } from '../services/api'
+import { useAuth } from '../context/AuthContext'
 import './Knowledge.css'
 
 function FileIcon({ type }) {
@@ -17,6 +18,8 @@ function FileIcon({ type }) {
 }
 
 export default function Knowledge() {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'  // server enforces too; this is just UI
   const [docs, setDocs] = useState([])
   const [totalChunks, setTotalChunks] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -111,22 +114,24 @@ export default function Knowledge() {
         </div>
       </div>
 
-      {/* Dropzone */}
-      <div
-        {...getRootProps()}
-        className={`dropzone ${isDragActive ? 'dropzone--active' : ''}`}
-      >
-        <input {...getInputProps()} />
-        <div className="dropzone-icon">
-          <Upload size={24} />
+      {/* Dropzone — admins only; members have read-only access */}
+      {isAdmin && (
+        <div
+          {...getRootProps()}
+          className={`dropzone ${isDragActive ? 'dropzone--active' : ''}`}
+        >
+          <input {...getInputProps()} />
+          <div className="dropzone-icon">
+            <Upload size={24} />
+          </div>
+          <div className="dropzone-text">
+            {isDragActive
+              ? 'Drop files here...'
+              : 'Drag & drop files here, or click to browse'}
+          </div>
+          <div className="dropzone-hint">Supports PDF, TXT, and Markdown files</div>
         </div>
-        <div className="dropzone-text">
-          {isDragActive
-            ? 'Drop files here...'
-            : 'Drag & drop files here, or click to browse'}
-        </div>
-        <div className="dropzone-hint">Supports PDF, TXT, and Markdown files</div>
-      </div>
+      )}
 
       {/* Upload queue */}
       {uploads.length > 0 && (
@@ -182,16 +187,18 @@ export default function Knowledge() {
                     <span className="doc-item__name">{filename}</span>
                     <span className="doc-item__ext badge badge-blue">{ext.replace('.', '').toUpperCase()}</span>
                   </div>
-                  <button
-                    className="btn btn-danger"
-                    onClick={() => handleDelete(filename)}
-                    disabled={deleting === filename}
-                  >
-                    {deleting === filename
-                      ? <div className="spinner" style={{ width: 14, height: 14 }} />
-                      : <Trash2 size={14} />}
-                    Delete
-                  </button>
+                  {isAdmin && (
+                    <button
+                      className="btn btn-danger"
+                      onClick={() => handleDelete(filename)}
+                      disabled={deleting === filename}
+                    >
+                      {deleting === filename
+                        ? <div className="spinner" style={{ width: 14, height: 14 }} />
+                        : <Trash2 size={14} />}
+                      Delete
+                    </button>
+                  )}
                 </div>
               )
             })}

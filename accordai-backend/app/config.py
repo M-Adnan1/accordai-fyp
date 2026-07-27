@@ -5,7 +5,26 @@ class Settings(BaseSettings):
     TWILIO_AUTH_TOKEN: str
     TWILIO_PHONE_NUMBER: str
     GROQ_API_KEY: str
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
     DATABASE_URL: str
+
+    # Fernet key for encrypting client tool credentials at rest
+    ENCRYPTION_KEY: str
+
+    # JWT auth
+    JWT_SECRET_KEY: str
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24h; refresh tokens are future work
+
+    # Public base URL of this backend (the tunnel/host Twilio can reach).
+    # Shown in Settings as the voice webhook base; not used for routing.
+    PUBLIC_BASE_URL: str = "http://localhost:8000"
+
+    # Client tool execution
+    TOOL_HTTP_TIMEOUT: float = 10.0
+    # Dev-only escape hatch so test scripts can point tools at 127.0.0.1.
+    # Must stay False in production — it disables SSRF protection.
+    ALLOW_PRIVATE_TOOL_URLS: bool = False
 
 
      # RAG
